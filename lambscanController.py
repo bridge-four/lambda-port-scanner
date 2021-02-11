@@ -12,13 +12,14 @@ from random import shuffle
 logger = logging.getLogger(__file__)
 logger.setLevel(logging.DEBUG)
 
-ZIPFILE = "workerfunction.zip"
-FN_NAME = "lambscan"
+ZIPFILE = "lambdaportscanner-workercode.zip"
+FN_NAME = "scanworker"
 
 class Scanner:
     def __init__(
             self,
             role_arn="",
+            s3zip=None,
             worker_name=FN_NAME,
             worker_max=1,
             thread_max=1,
@@ -26,17 +27,24 @@ class Scanner:
 
         self.botoConfig = Config(
             region_name=region,
-            read_timeout=300,
-            connect_timeout=300,
-            retries={"total_max_attempts": 2}
+            read_timeout=600,
+            connect_timeout=600,
+            retries={"total_max_attempts": 10}
         )
 
         self.role_arn = role_arn
         self.region = region
+        if s3zip:
+            self.s3bucket = s3zip.split('/')[0]
+            self.s3key = "/".join(s3zip.split('/')[1:])
+            logger.debug(f"Using code from S3. Bucket = {self.s3bucket}, Key = {self.s3key}")
+        else:
+            self.s3bucket = None
+            self.s3key = None
 
         # Create a default client that the class can use for single tasks
         if region:
-            self.lambda_client = boto3.client('lambda', region_name=self.region)
+            self.lambda_client = boto3.client('lambda', config=self.botoConfig)
         else:
             self.lambda_client = boto3.client('lambda')
 
@@ -146,7 +154,7 @@ class Scanner:
         logger.debug(f"Lambda Functions to delete: {tmpcount}")
         prefix = self.worker_name + "_"
         future_list = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
             for function in self.fn_names:
                 future = executor.submit(self.delete_function, function)
                 future_list.append(future)
@@ -163,7 +171,7 @@ class Scanner:
     # Delete the given Lambda function from AWS
     def delete_function(self, fn_name):
         logger.debug(f"Deleting {fn_name}")
-        tmp_lambda_client = boto3.client('lambda', region_name=self.region)
+        tmp_lambda_client = boto3.client('lambda', config=self.botoConfig)
         tmp_lambda_client.delete_function(FunctionName=fn_name)
         return("Success Deleting", fn_name)
 
@@ -206,7 +214,7 @@ class Scanner:
             self.next_worker()
 
         # Create new boto3 client to be thread-safe
-        tmp_lambda_client = boto3.client('lambda', region_name=self.region)
+        tmp_lambda_client = boto3.client('lambda', config=self.botoConfig)
 
         # Invoke Lambda function to actually execute the port scan
         response = tmp_lambda_client.invoke(
@@ -233,16 +241,22 @@ class Scanner:
 
     # Start multi-threading job to create lambda functions in AWS faster
     def createWorkers(self):
+        # Determine code location and load
+        if self.s3bucket:
+            codeParams = {'S3Bucket': self.s3bucket, 'S3Key': self.s3key}
+        else:
+            codeParams = {'ZipFile': open(ZIPFILE, 'rb').read()}
+
         future_list = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
             for i in range(self.worker_max):
-                future = executor.submit(self.create_worker_function, i)
+                future = executor.submit(self.create_worker_function, i, codeParams)
                 future_list.append(future)
-        for future in future_list:
-            try:
-                logger.debug(future.result())
-            except Exception as e:
-                logger.info(e)
+            for future in concurrent.futures.as_completed(future_list):
+                try:
+                    logger.debug(future.result())
+                except Exception as e:
+                    logger.info(e)
 
         logger.debug("Verifying worker count...")
         tmpCount = self.count_all_lambda_workers()
@@ -253,17 +267,17 @@ class Scanner:
             raise Exception(f"Error: could not create required worker functions. Counted: {tmpCount} Requested: {self.worker_max}")
 
     # Create single AWS lambda function worker
-    def create_worker_function(self, functionIndex):
+    def create_worker_function(self, functionIndex, codeParams):
         fn_name = self.worker_name + "_" + str(functionIndex)
         try:
             logger.debug(f"Creating worker: {fn_name}")
-            tmp_lambda_client = boto3.client('lambda', region_name=self.region)
+            tmp_lambda_client = boto3.client('lambda', config=self.botoConfig)
             tmp_lambda_client.create_function(
                 FunctionName=fn_name,
                 Runtime='python3.8',
                 Role=self.role_arn,
                 Handler=f"{self.worker_name}.lambda_handler",
-                Code={'ZipFile': open(ZIPFILE, 'rb').read(), },
+                Code=codeParams,
                 Timeout=20)
             return(f"Success creating: {fn_name}")
         except Exception as e:
@@ -283,10 +297,11 @@ def parse_args(parser):
     parser.add_argument('--target-file', nargs='?', dest='target_file', help='File with one IP address or CIDR per line')
     parser.add_argument('--workers', default=1, dest='worker_max', help='Number of Lambda workers to create')
     parser.add_argument('--threads', default=1, dest='thread_max', help='Max number of threads for port scanning')
-    parser.add_argument('--clean', default=False, action='store_true', help='Do not scan. Delete all Lambda functions matching ^lambscan_. Use if something goes wrong.')
+    parser.add_argument('--clean', default=False, action='store_true', help='Do not scan. Delete all Lambda functions matching ^scanworker_. Use if something goes wrong.')
     parser.add_argument('--region', dest='region', help='Specify the target region to create and run the lambscan workers (e.g, us-east-1)')
     parser.add_argument('--outfile', dest='outfile', help='Specify the output file to store timestamped scan results')
     parser.add_argument('--open', dest='open', action="store_true", help='Only show open ports')
+    parser.add_argument('--s3-zip', dest='s3zip', nargs='?', help='Provide a S3 bucket and key path to the code ZIP file and the controller will use that to create each function worker instead of uploading each manually')
     parser.add_argument("-v", "--verbose", dest='verbose', action="store_true", help="increase console output verbosity")
 
     args = parser.parse_args()
@@ -327,6 +342,7 @@ if __name__ == "__main__":
         worker_name=FN_NAME,
         worker_max=args.worker_max,
         thread_max=args.thread_max,
+        s3zip=args.s3zip,
         region=args.region)
 
     # Check if user wants to clean out old functions
