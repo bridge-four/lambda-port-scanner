@@ -51,7 +51,7 @@ class Scanner:
         # Create a default client that the class can use for single tasks
         self.lambda_client = boto3.client('lambda', config=self.botoConfig)
 
-        self.worker_name = worker_name  # Prefix name of Lambda functions
+        self.worker_name = FN_NAME  # Prefix name of Lambda functions
         self.worker_max = int(worker_max)  # Max number of Lambda worker functions
         self.worker_current = 0  # Keep track of which Lambda worker was the last used
         self.thread_max = int(thread_max)
@@ -360,7 +360,7 @@ def parse_args(parser):
     requiredNamed.add_argument('--role', nargs='?', required=True, dest='role', help='AWS IAM role ARN for lambda functions to use')
     requiredNamed.add_argument('--target', nargs='?', dest='target', help='IP address or CIDR range')
     requiredNamed.add_argument('--target-file', nargs='?', dest='target_file', help='File with one IP address or CIDR per line')
-    requiredNamed.add_argument('--region', nargs='?', dest='region', required=True, help='Specify the target region to create and run the lambscan workers (e.g, us-east-1)')
+    requiredNamed.add_argument('--region', nargs='?', dest='region', required=True, help='Specify the target region to create and run the Lambda workers (e.g, us-east-1)')
     portscan.add_argument('--workers', default=1, dest='worker_max', help='Number of Lambda workers to create. Default: 1')
     portscan.add_argument('--threads', default=1, dest='thread_max', help='Max number of threads for port scanning. Default: 1')
     portscan.add_argument('--outfile', dest='outfile', help='Specify the output file to store timestamped scan results')
@@ -376,7 +376,7 @@ def parse_args(parser):
     nmaprequiredNamed = nmap.add_argument_group('required named arguments')
     nmaprequiredNamed.add_argument('--target', nargs='?', dest='target', help='IP address or CIDR range')
     nmaprequiredNamed.add_argument('--target-file', nargs='?', dest='target_file', help='File with one IP address or CIDR per line')
-    nmaprequiredNamed.add_argument('--region', nargs='?', dest='region', required=True, help='Specify the target region to create and run the lambscan workers (e.g, us-east-1)')
+    nmaprequiredNamed.add_argument('--region', nargs='?', dest='region', required=True, help='Specify the target region to create and run the Lambda workers (e.g, us-east-1)')
     nmaprequiredNamed.add_argument('--role', nargs='?', required=True, dest='role', help='AWS IAM role ARN for lambda functions to use')
     nmap.add_argument('--workers', default=1, dest='worker_max', help='Number of Lambda workers to create. Default: 1')
     nmap.add_argument('--threads', default=1, dest='thread_max', help='Max number of threads for port scanning. Default: 1')
@@ -404,6 +404,18 @@ def parse_args(parser):
 # Main program execution
 ##############################################
 def subCommand_portscan(args):
+    global ZIPFILE
+    ZIPFILE = "workercode-portscan.zip"  # local ZIP if not using S3zip
+
+    # Make sure required arguments are set
+    if not (args.target or args.target_file) or not args.ports or not args.role:
+        parser.print_help()
+        exit(1)
+
+    if args.target and args.target_file:
+        print("ERROR: Specify a target or a target file, not both.")
+        exit()
+
     # Initialize scanner
     scanner = Scanner(
         role_arn=args.role,
@@ -414,14 +426,7 @@ def subCommand_portscan(args):
         s3zip=args.s3zip,
         region=args.region)
 
-    # Make sure required arguments are set
-    if not (args.target or args.target_file) or not args.ports or not args.role:
-        parser.print_help()
-        exit(1)
-
-    if args.target and args.target_file:
-        print("ERROR: Specify a target or a target file, not both.")
-        exit()
+    #print("codeParams:", scanner.codeParams)
 
     # Add target ports
     scanner.add_ports_from_string(args.ports)
@@ -445,7 +450,7 @@ def subCommand_portscan(args):
     logger.debug(f"Using {scanner.thread_max} threads")
     scanner.threadedScan()
 
-    # Delete LambScan worker functions
+    # Delete Lambda worker functions
     print("[*] Deleting Lambda workers from AWS...")
     scanner.threaded_lambda_cleanup()
     print("[*] Done!")
@@ -497,7 +502,7 @@ def subCommand_nmap(args):
     scanner.threadedNmapScan()
 
     # Clean up functions
-    print("[*] Deleting LambScan functions from AWS...")
+    print("[*] Deleting Lambda functions from AWS...")
     scanner.threaded_lambda_cleanup()
     print("[*] Done!")
 
@@ -505,10 +510,10 @@ def subCommand_nmap(args):
 def subCommand_clean(args):
     scanner = Scanner(region=args.region)
     try:
-        print("[*] Deleting LambScan functions from AWS...")
+        print("[*] Deleting Lambda functions from AWS...")
         scanner.threaded_lambda_cleanup()
     except Exception as e:
-        print("ERROR: Could not delete LambScan functions!\nException: " + str(e))
+        print("ERROR: Could not delete Lambda functions!\nException: " + str(e))
         exit(1)
     exit(0)
 
