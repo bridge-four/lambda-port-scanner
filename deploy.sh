@@ -1,13 +1,11 @@
 #!/bin/bash
 
-PORTS_LAMBDA_WORKER_ZIP='lambdaportscanner-workercode.zip'
-NMAP_LAMBDA_WORKER_ZIP='lambdaportscanner-workercode-nmap.zip'
-BUCKET_SUFFIX='lambda-port-scanner'
-ROLE_NAME='lambda-port-scanner'
+PORTS_LAMBDA_WORKER_ZIP='workercode-portscan.zip'
+NMAP_LAMBDA_WORKER_ZIP='workercode-nmap.zip'
+BUCKET_NAME='lambdaportscanner'
+ROLE_NAME='lambdaportscanner'
 
 function create_bucket() {
-    GUID=$(python -c 'import uuid; print(uuid.uuid1())')
-    BUCKET_NAME=$GUID-$BUCKET_SUFFIX
     aws s3api create-bucket --bucket $BUCKET_NAME | jq '.Location'
 }
 
@@ -29,9 +27,10 @@ function main() {
     upload_code_zips
     echo "[*] Creating Lambda IAM Execution Role"
     create_role
-    echo "Use these for controller arguments:" 
+    echo "** Use these for controller arguments: **" 
     echo "--role $ROLE_ARN"
-    echo "--s3-zip $BUCKET_NAME/$PORTS_LAMBDA_WORKER_ZIP"
+    echo "For portscan command: --s3-zip $BUCKET_NAME/$PORTS_LAMBDA_WORKER_ZIP"
+    echo "For nmap command: --s3-zip $BUCKET_NAME/$NMAP_LAMBDA_WORKER_ZIP"
 }
 
 main
