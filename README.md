@@ -283,7 +283,7 @@ Crash, exception, or other issues? Trigger a manual cleanup of any leftover work
 Some functionality inspired from or originally developed in [LambScan](https://github.com/rickoooooo/LambScan) and [Nmap-aws](https://github.com/3m3x/nmap-aws). Grateful to these developers for their contributions to open source!
 
 ## To Do:
-- [ ] Concurrency performance comparisons with asyncio or aioboto3 (or potentially shift the execution to an AWS Batch service)
-- [ ] Add ability to do a full Nmap per target instead of simple port up/down checks
+- [ ] Concurrency performance comparisons with asyncio or aioboto3 (or potentially shift the execution to an AWS Batch service -- this would be much more scalable)
+- [x] Add ability to do a full Nmap per target instead of simple port up/down checks
 - [ ] The 1000 function limit is technically *per region*, so we could technically also add ability to distribute the scan across multiple regions to go above that limit
-- [ ] Maybe add the option to store output/logs in a S3 bucket or 
+- [ ] Maybe add the option to store output/logs in a S3 bucket or DynamoDB
